@@ -82,6 +82,14 @@ The radio will login to the named repeater and periodically query its stats.
 | `meshcore_packets_direct_tx_total` | Packets sent via direct routing |
 | `meshcore_packets_flood_rx_total` | Packets received via flood routing |
 | `meshcore_packets_direct_rx_total` | Packets received via direct routing |
+| `meshcore_scrape_errors_total` | Total number of scrape errors |
+| `meshcore_login_status` | Login status (1=logged in, 0=not logged in) |
+| `meshcore_mesh_packets_observed_total` | Mesh packets observed by sender |
+| `meshcore_mesh_packet_rssi_dbm` | Last RSSI of packets from a mesh sender |
+| `meshcore_mesh_packet_snr_db` | Last SNR of packets from a mesh sender |
+| `meshcore_mesh_packet_bytes_total` | Total bytes observed from mesh senders |
+| `meshcore_node_latitude` | Node latitude in degrees |
+| `meshcore_node_longitude` | Node longitude in degrees |
 
 ## Grafana
 
