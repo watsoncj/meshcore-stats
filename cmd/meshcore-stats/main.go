@@ -230,6 +230,7 @@ func collectRemoteMetrics(radio *meshcore.Radio, interval time.Duration, repeate
 		if err != nil {
 			log.Printf("Error sending status request: %v", err)
 			metrics.ScrapeErrors.WithLabelValues(repeaterName).Inc()
+			loggedIn = false
 			return
 		}
 
@@ -238,6 +239,7 @@ func collectRemoteMetrics(radio *meshcore.Radio, interval time.Duration, repeate
 		if err != nil {
 			log.Printf("Error waiting for status response: %v", err)
 			metrics.ScrapeErrors.WithLabelValues(repeaterName).Inc()
+			loggedIn = false
 			return
 		}
 
