@@ -1,0 +1,14 @@
+[Unit]
+Description=MeshCore Prometheus Exporter
+After=network.target
+
+[Service]
+Type=simple
+User=watsoncj
+EnvironmentFile=/etc/meshcore-stats.env
+ExecStart=/usr/local/bin/meshcore-stats -port ${SERIAL_PORT} -repeater "${REPEATER_NAME}" -password "${REPEATER_PASSWORD}" -interval "${INTERVAL}"
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
