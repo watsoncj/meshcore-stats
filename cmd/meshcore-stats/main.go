@@ -113,6 +113,7 @@ func reconnect(radio *meshcore.Radio, node string) bool {
 	log.Printf("Serial connection error, attempting reboot and reconnect...")
 	metrics.ScrapeErrors.WithLabelValues(node).Inc()
 
+	metrics.RadioReboots.WithLabelValues(node).Inc()
 	if err := radio.Reboot(); err != nil {
 		log.Printf("Reboot command failed (expected if port is dead): %v", err)
 	} else {
@@ -131,12 +132,15 @@ func reconnect(radio *meshcore.Radio, node string) bool {
 			continue
 		}
 		log.Printf("Reconnected to serial port after %d attempt(s)", attempt)
+		metrics.SerialReconnects.WithLabelValues(node).Inc()
 		return true
 	}
 }
 
 func collectLocalMetrics(radio *meshcore.Radio, interval time.Duration) {
 	const node = "local"
+	metrics.RadioReboots.WithLabelValues(node)
+	metrics.SerialReconnects.WithLabelValues(node)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -197,6 +201,9 @@ func collectLocalMetrics(radio *meshcore.Radio, interval time.Duration) {
 }
 
 func collectRemoteMetrics(radio *meshcore.Radio, interval time.Duration, repeaterName, password string) {
+	metrics.RadioReboots.WithLabelValues(repeaterName)
+	metrics.SerialReconnects.WithLabelValues(repeaterName)
+	metrics.RepeaterLogins.WithLabelValues(repeaterName)
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -319,6 +326,7 @@ func collectRemoteMetrics(radio *meshcore.Radio, interval time.Duration, repeate
 				log.Printf("Login successful!")
 				loggedIn = true
 				metrics.LoginStatus.WithLabelValues(repeaterName).Set(1)
+				metrics.RepeaterLogins.WithLabelValues(repeaterName).Inc()
 			} else {
 				log.Printf("Login failed (bad password?)")
 				metrics.LoginStatus.WithLabelValues(repeaterName).Set(0)

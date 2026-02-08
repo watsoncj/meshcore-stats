@@ -112,6 +112,21 @@ var (
 		Help: "Total bytes observed from mesh senders",
 	}, []string{"node", "sender"})
 
+	RepeaterLogins = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "meshcore_repeater_logins_total",
+		Help: "Total successful repeater logins",
+	}, []string{"node"})
+
+	RadioReboots = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "meshcore_radio_reboots_total",
+		Help: "Total companion radio reboot commands sent",
+	}, []string{"node"})
+
+	SerialReconnects = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "meshcore_serial_reconnects_total",
+		Help: "Total serial port reconnections",
+	}, []string{"node"})
+
 	// Node position metrics
 	NodeLatitude = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "meshcore_node_latitude",
