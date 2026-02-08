@@ -97,15 +97,57 @@ func setRegionCmd() {
 	log.Println("Done! Radio is now configured for", r.Name)
 }
 
+func isSerialError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "input/output error") ||
+		strings.Contains(msg, "no such device") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "device not configured") ||
+		strings.Contains(msg, "invalid frame header")
+}
+
+func reconnect(radio *meshcore.Radio, node string) bool {
+	log.Printf("Serial connection error, attempting reboot and reconnect...")
+	metrics.ScrapeErrors.WithLabelValues(node).Inc()
+
+	if err := radio.Reboot(); err != nil {
+		log.Printf("Reboot command failed (expected if port is dead): %v", err)
+	} else {
+		log.Printf("Reboot command sent, waiting for radio to restart...")
+	}
+	time.Sleep(5 * time.Second)
+
+	for attempt := 1; ; attempt++ {
+		if err := radio.Reconnect(); err != nil {
+			delay := time.Duration(attempt) * 5 * time.Second
+			if delay > 60*time.Second {
+				delay = 60 * time.Second
+			}
+			log.Printf("Reconnect attempt %d failed: %v (retrying in %s)", attempt, err, delay)
+			time.Sleep(delay)
+			continue
+		}
+		log.Printf("Reconnected to serial port after %d attempt(s)", attempt)
+		return true
+	}
+}
+
 func collectLocalMetrics(radio *meshcore.Radio, interval time.Duration) {
 	const node = "local"
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	collect := func() {
+	collect := func() (reconnected bool) {
 		if core, err := radio.GetStatsCore(); err != nil {
 			log.Printf("Error getting core stats: %v", err)
 			metrics.ScrapeErrors.WithLabelValues(node).Inc()
+			if isSerialError(err) {
+				reconnect(radio, node)
+				return true
+			}
 		} else {
 			metrics.BatteryMillivolts.WithLabelValues(node).Set(float64(core.BatteryMV))
 			metrics.UptimeSeconds.WithLabelValues(node).Set(float64(core.UptimeSecs))
@@ -116,6 +158,10 @@ func collectLocalMetrics(radio *meshcore.Radio, interval time.Duration) {
 		if radioStats, err := radio.GetStatsRadio(); err != nil {
 			log.Printf("Error getting radio stats: %v", err)
 			metrics.ScrapeErrors.WithLabelValues(node).Inc()
+			if isSerialError(err) {
+				reconnect(radio, node)
+				return true
+			}
 		} else {
 			metrics.NoiseFloorDBm.WithLabelValues(node).Set(float64(radioStats.NoiseFloor))
 			metrics.LastRSSI.WithLabelValues(node).Set(float64(radioStats.LastRSSI))
@@ -127,6 +173,10 @@ func collectLocalMetrics(radio *meshcore.Radio, interval time.Duration) {
 		if packets, err := radio.GetStatsPackets(); err != nil {
 			log.Printf("Error getting packet stats: %v", err)
 			metrics.ScrapeErrors.WithLabelValues(node).Inc()
+			if isSerialError(err) {
+				reconnect(radio, node)
+				return true
+			}
 		} else {
 			metrics.PacketsReceived.WithLabelValues(node).Set(float64(packets.Recv))
 			metrics.PacketsSent.WithLabelValues(node).Set(float64(packets.Sent))
@@ -135,11 +185,14 @@ func collectLocalMetrics(radio *meshcore.Radio, interval time.Duration) {
 			metrics.PacketsFloodRx.WithLabelValues(node).Set(float64(packets.FloodRx))
 			metrics.PacketsDirectRx.WithLabelValues(node).Set(float64(packets.DirectRx))
 		}
+		return false
 	}
 
-	collect()
+	for collect() {
+	}
 	for range ticker.C {
-		collect()
+		for collect() {
+		}
 	}
 }
 
@@ -149,15 +202,57 @@ func collectRemoteMetrics(radio *meshcore.Radio, interval time.Duration, repeate
 
 	var targetContact *meshcore.Contact
 	var loggedIn bool
+	var lastContactRefresh time.Time
+	const contactRefreshInterval = 1 * time.Hour
 
-	collect := func() {
+	resetState := func() {
+		targetContact = nil
+		loggedIn = false
+	}
+
+	handleIOError := func(err error) bool {
+		if !isSerialError(err) {
+			return false
+		}
+		reconnect(radio, repeaterName)
+		resetState()
+		return true
+	}
+
+	refreshContacts := func() bool {
+		log.Printf("Refreshing contacts...")
+		contacts, err := radio.GetContacts()
+		if err != nil {
+			log.Printf("Error refreshing contacts: %v", err)
+			return handleIOError(err)
+		}
+		radio.SetContacts(contacts)
+		log.Printf("Contacts refreshed (%d nodes)", len(contacts))
+		for i := range contacts {
+			c := &contacts[i]
+			if c.Lat != 0 || c.Lon != 0 {
+				metrics.NodeLatitude.WithLabelValues(c.Name).Set(c.Lat)
+				metrics.NodeLongitude.WithLabelValues(c.Name).Set(c.Lon)
+			}
+		}
+		lastContactRefresh = time.Now()
+		return false
+	}
+
+	collect := func() (reconnected bool) {
+		if targetContact != nil && time.Since(lastContactRefresh) > contactRefreshInterval {
+			if refreshContacts() {
+				return true
+			}
+		}
+
 		if targetContact == nil {
 			log.Printf("Initializing companion radio...")
 			selfInfo, err := radio.AppStart()
 			if err != nil {
 				log.Printf("Error starting app: %v", err)
 				metrics.ScrapeErrors.WithLabelValues(repeaterName).Inc()
-				return
+				return handleIOError(err)
 			}
 			log.Printf("Connected as: %s (%.6f, %.6f)", selfInfo.Name, selfInfo.Lat, selfInfo.Lon)
 			radio.AddSelfToContacts(selfInfo)
@@ -171,12 +266,15 @@ func collectRemoteMetrics(radio *meshcore.Radio, interval time.Duration, repeate
 			if err != nil {
 				log.Printf("Error getting contacts: %v", err)
 				metrics.ScrapeErrors.WithLabelValues(repeaterName).Inc()
-				return
+				return handleIOError(err)
 			}
 
 			radio.SetContacts(contacts)
+			lastContactRefresh = time.Now()
+			log.Printf("Contacts (%d):", len(contacts))
 			for i := range contacts {
 				c := &contacts[i]
+				log.Printf("  [%02X] %s (type=%d, path=%d)", c.PubKey[0], c.Name, c.Type, c.OutPathLen)
 				if c.Lat != 0 || c.Lon != 0 {
 					metrics.NodeLatitude.WithLabelValues(c.Name).Set(c.Lat)
 					metrics.NodeLongitude.WithLabelValues(c.Name).Set(c.Lon)
@@ -192,46 +290,49 @@ func collectRemoteMetrics(radio *meshcore.Radio, interval time.Duration, repeate
 				for _, c := range contacts {
 					log.Printf("  - %s (type=%d)", c.Name, c.Type)
 				}
-				return
+				return false
 			}
 		}
 
-		if !loggedIn {
-			log.Printf("Logging into repeater %s...", targetContact.Name)
+		if !loggedIn && password != "" {
+			log.Printf("Logging into repeater %s (path=%d)...", targetContact.Name, targetContact.OutPathLen)
 			radio.SetNodeName(repeaterName)
 			_, err := radio.SendLogin(targetContact.PubKey[:], password)
 			if err != nil {
 				log.Printf("Error sending login: %v", err)
 				metrics.ScrapeErrors.WithLabelValues(repeaterName).Inc()
-				return
+				metrics.LoginStatus.WithLabelValues(repeaterName).Set(0)
+				return handleIOError(err)
 			}
 
 			loginCodes := []byte{meshcore.PushCodeLoginSuccess, meshcore.PushCodeLoginFail}
 			data, err := radio.WaitForPushCode(loginCodes, 30*time.Second)
 			if err != nil {
-				log.Printf("Error waiting for login response: %v", err)
+				log.Printf("Error waiting for login response (repeater unreachable?): %v", err)
 				metrics.ScrapeErrors.WithLabelValues(repeaterName).Inc()
-				return
-			}
-
-			if data[0] == meshcore.PushCodeLoginSuccess {
+				metrics.LoginStatus.WithLabelValues(repeaterName).Set(0)
+				if handleIOError(err) {
+					return true
+				}
+				log.Printf("Attempting status request without confirmed login...")
+			} else if data[0] == meshcore.PushCodeLoginSuccess {
 				log.Printf("Login successful!")
 				loggedIn = true
 				metrics.LoginStatus.WithLabelValues(repeaterName).Set(1)
 			} else {
-				log.Printf("Login failed!")
+				log.Printf("Login failed (bad password?)")
 				metrics.LoginStatus.WithLabelValues(repeaterName).Set(0)
-				return
+				return false
 			}
 		}
 
-		log.Printf("Requesting status from %s...", targetContact.Name)
+		log.Printf("Requesting status from %s (path=%d)...", targetContact.Name, targetContact.OutPathLen)
 		_, err := radio.SendStatusReq(targetContact.PubKey[:])
 		if err != nil {
 			log.Printf("Error sending status request: %v", err)
 			metrics.ScrapeErrors.WithLabelValues(repeaterName).Inc()
 			loggedIn = false
-			return
+			return handleIOError(err)
 		}
 
 		statusCodes := []byte{meshcore.PushCodeStatusResponse}
@@ -240,7 +341,7 @@ func collectRemoteMetrics(radio *meshcore.Radio, interval time.Duration, repeate
 			log.Printf("Error waiting for status response: %v", err)
 			metrics.ScrapeErrors.WithLabelValues(repeaterName).Inc()
 			loggedIn = false
-			return
+			return handleIOError(err)
 		}
 
 		if data[0] == meshcore.PushCodeStatusResponse {
@@ -248,7 +349,7 @@ func collectRemoteMetrics(radio *meshcore.Radio, interval time.Duration, repeate
 			if err != nil {
 				log.Printf("Error parsing status response: %v", err)
 				metrics.ScrapeErrors.WithLabelValues(repeaterName).Inc()
-				return
+				return false
 			}
 
 			metrics.BatteryMillivolts.WithLabelValues(repeaterName).Set(float64(core.BatteryMV))
@@ -273,10 +374,13 @@ func collectRemoteMetrics(radio *meshcore.Radio, interval time.Duration, repeate
 		} else {
 			log.Printf("Unexpected response: 0x%02X", data[0])
 		}
+		return false
 	}
 
-	collect()
+	for collect() {
+	}
 	for range ticker.C {
-		collect()
+		for collect() {
+		}
 	}
 }

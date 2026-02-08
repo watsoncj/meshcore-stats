@@ -19,29 +19,51 @@ const (
 type Radio struct {
 	port        serial.Port
 	mu          sync.Mutex
+	portName    string
+	baudRate    int
 	nodeName    string
-	contactsMap map[string]string // pubkey prefix -> name
+	contactsMap map[string]string // pubkey prefix (4 hex chars) -> name
+	pathByteMap map[byte]string   // path byte (1-byte hash) -> name
 }
 
 func Open(portName string, baudRate int) (*Radio, error) {
+	r := &Radio{portName: portName, baudRate: baudRate}
+	if err := r.openPort(); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (r *Radio) openPort() error {
 	mode := &serial.Mode{
-		BaudRate: baudRate,
+		BaudRate: r.baudRate,
 		DataBits: 8,
 		Parity:   serial.NoParity,
 		StopBits: serial.OneStopBit,
 	}
 
-	port, err := serial.Open(portName, mode)
+	port, err := serial.Open(r.portName, mode)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open serial port: %w", err)
+		return fmt.Errorf("failed to open serial port: %w", err)
 	}
 
 	if err := port.SetReadTimeout(2 * time.Second); err != nil {
 		port.Close()
-		return nil, fmt.Errorf("failed to set read timeout: %w", err)
+		return fmt.Errorf("failed to set read timeout: %w", err)
 	}
 
-	return &Radio{port: port}, nil
+	r.port = port
+	return nil
+}
+
+func (r *Radio) Reconnect() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if r.port != nil {
+		r.port.Close()
+	}
+	return r.openPort()
 }
 
 func (r *Radio) Close() error {
@@ -86,9 +108,15 @@ func (r *Radio) SetNodeName(name string) {
 
 func (r *Radio) SetContacts(contacts []Contact) {
 	r.contactsMap = make(map[string]string)
+	r.pathByteMap = make(map[byte]string)
 	for _, c := range contacts {
 		prefix := fmt.Sprintf("%02X%02X", c.PubKey[0], c.PubKey[1])
 		r.contactsMap[prefix] = c.Name
+		// The path hash is just pub_key[0] (first byte of pubkey)
+		// Note: collisions are possible but we just take the first match
+		if _, exists := r.pathByteMap[c.PubKey[0]]; !exists {
+			r.pathByteMap[c.PubKey[0]] = c.Name
+		}
 	}
 }
 
@@ -96,8 +124,14 @@ func (r *Radio) AddSelfToContacts(info *SelfInfo) {
 	if r.contactsMap == nil {
 		r.contactsMap = make(map[string]string)
 	}
+	if r.pathByteMap == nil {
+		r.pathByteMap = make(map[byte]string)
+	}
 	prefix := fmt.Sprintf("%02X%02X", info.PubKey[0], info.PubKey[1])
 	r.contactsMap[prefix] = info.Name
+	if _, exists := r.pathByteMap[info.PubKey[0]]; !exists {
+		r.pathByteMap[info.PubKey[0]] = info.Name
+	}
 }
 
 func (r *Radio) LookupSender(prefix string) string {
@@ -110,27 +144,62 @@ func (r *Radio) LookupSender(prefix string) string {
 	return prefix
 }
 
+// LookupSenderByPathByte maps a 1-byte path hash to a contact name.
+// MeshCore uses a single-byte truncated hash of the pubkey for path routing.
+func (r *Radio) LookupSenderByPathByte(pathByte byte) string {
+	if r.pathByteMap == nil {
+		return fmt.Sprintf("%02X", pathByte)
+	}
+	if name, ok := r.pathByteMap[pathByte]; ok {
+		return name
+	}
+	return fmt.Sprintf("%02X", pathByte)
+}
+
 func (r *Radio) handlePushMessage(data []byte) {
 	if len(data) == 0 {
 		return
 	}
 	switch data[0] {
 	case PushCodeLogRxData:
-		if len(data) > 7 {
-			rssi := int8(data[2])
-			snr := float64(int8(data[3])) / 4.0
-			senderPrefix := fmt.Sprintf("%02X%02X", data[5], data[6])
-			senderName := r.LookupSender(senderPrefix)
-			payloadLen := len(data) - 7
+		// Format: [0]=0x88, [1]=snr*4, [2]=rssi, [3+]=raw_packet
+		// Raw packet: [0]=header, [1]=path_len, [2..]=path, remainder=encrypted_payload
+		// The sender identity is encrypted and not directly extractable.
+		// We can only track packets by "origin" = first hop in the path (the node we received from).
+		if len(data) < 6 {
+			return
+		}
+		snr := float64(int8(data[1])) / 4.0
+		rssi := int8(data[2])
+		rawPacket := data[3:]
 
-			node := r.nodeName
-			if node == "" {
-				node = "unknown"
-			}
-			metrics.MeshPacketsObserved.WithLabelValues(node, senderName).Inc()
-			metrics.MeshPacketRSSI.WithLabelValues(node, senderName).Set(float64(rssi))
-			metrics.MeshPacketSNR.WithLabelValues(node, senderName).Set(snr)
-			metrics.MeshPacketBytes.WithLabelValues(node, senderName).Add(float64(payloadLen))
+		// Raw packet structure
+		if len(rawPacket) < 3 {
+			return
+		}
+		// header := rawPacket[0]
+		pathLen := int(rawPacket[1])
+
+		// The origin is the first hop in the path - this is the node we received from directly.
+		// For zero-hop packets, the path is empty and we can't identify the sender.
+		var origin string
+		if pathLen > 0 && len(rawPacket) >= 2+pathLen {
+			// First path byte is the immediate sender (1-byte truncated hash of pubkey)
+			origin = r.LookupSenderByPathByte(rawPacket[2])
+		} else {
+			origin = "direct"
+		}
+		payloadLen := len(rawPacket) - 2 - pathLen
+
+		node := r.nodeName
+		if node == "" {
+			node = "unknown"
+		}
+		metrics.MeshPacketsObserved.WithLabelValues(node, origin).Inc()
+		metrics.MeshPacketRSSI.WithLabelValues(node, origin).Set(float64(rssi))
+		metrics.MeshPacketSNR.WithLabelValues(node, origin).Set(snr)
+		if payloadLen > 0 {
+			metrics.MeshPacketBytes.WithLabelValues(node, origin).Add(float64(payloadLen))
 		}
 	}
 }
@@ -220,7 +289,22 @@ func (r *Radio) GetContacts() ([]Contact, error) {
 		return nil, fmt.Errorf("failed to write command: %w", err)
 	}
 
-	data, err := r.readFrame()
+	// Read frames, skipping any push messages
+	readResponseFrame := func() ([]byte, error) {
+		for {
+			data, err := r.readFrame()
+			if err != nil {
+				return nil, err
+			}
+			if len(data) > 0 && isPushCode(data[0]) {
+				r.handlePushMessage(data)
+				continue
+			}
+			return data, nil
+		}
+	}
+
+	data, err := readResponseFrame()
 	if err != nil {
 		return nil, err
 	}
@@ -231,7 +315,7 @@ func (r *Radio) GetContacts() ([]Contact, error) {
 
 	contacts := make([]Contact, 0, count)
 	for {
-		data, err := r.readFrame()
+		data, err := readResponseFrame()
 		if err != nil {
 			return nil, err
 		}

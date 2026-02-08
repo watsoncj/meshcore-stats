@@ -173,7 +173,7 @@ func ParseSelfInfo(data []byte) (*SelfInfo, error) {
 	// [48-51]=freq, [52-55]=bw, [56]=sf, [57]=cr, [58+]=name
 	const headerSize = 58
 	if len(data) < headerSize {
-		return nil, fmt.Errorf("insufficient data for self info: %d", len(data))
+		return nil, fmt.Errorf("insufficient data for self info: got %d bytes, data=%X", len(data), data)
 	}
 	if data[0] != RespCodeSelfInfo {
 		return nil, fmt.Errorf("unexpected response code: 0x%02X", data[0])
