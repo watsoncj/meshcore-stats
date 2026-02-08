@@ -9,7 +9,7 @@ build:
 install: build
 	sudo systemctl stop $(BINARY) || true
 	sudo cp $(BINARY) $(INSTALL_PATH)
-	sudo systemctl start $(BINARY)
+	sudo systemctl restart $(BINARY)
 
 clean:
 	rm -f $(BINARY)
