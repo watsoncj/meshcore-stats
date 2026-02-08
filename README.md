@@ -104,12 +104,6 @@ Import the included `grafana-dashboard.json` for a pre-built dashboard with:
 ## Install as systemd Service
 
 ```bash
-# Build
-go build -o meshcore-stats ./cmd/meshcore-stats
-
-# Install binary
-sudo cp meshcore-stats /usr/local/bin/
-
 # Create config file (edit with your repeater name and password)
 sudo cp meshcore-stats.env.example /etc/meshcore-stats.env
 sudo chmod 600 /etc/meshcore-stats.env
@@ -119,7 +113,9 @@ sudo nano /etc/meshcore-stats.env
 sudo cp meshcore-stats.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable meshcore-stats
-sudo systemctl start meshcore-stats
+
+# Build and install binary
+make install
 
 # Check status
 sudo systemctl status meshcore-stats
