@@ -5,7 +5,16 @@
   "editable": true,
   "fiscalYearStartMonth": 0,
   "graphTooltip": 0,
-  "links": [],
+  "links": [
+    {
+      "icon": "external link",
+      "tags": [],
+      "targetBlank": true,
+      "title": "GitHub",
+      "type": "link",
+      "url": "https://github.com/watsoncj/meshcore-stats"
+    }
+  ],
   "panels": [
     {
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
@@ -34,7 +43,7 @@
           "type": "carto"
         },
         "controls": {
-          "mouseWheelZoom": true,
+          "mouseWheelZoom": false,
           "showAttribution": true,
           "showDebug": false,
           "showMeasure": true,
@@ -104,7 +113,7 @@
     {
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 },
       "id": 100,
-      "title": "Repeater Status",
+      "title": "Fox Run Repeater Status",
       "type": "row"
     },
     {
@@ -261,7 +270,7 @@
           "unit": "s"
         }
       },
-      "gridPos": { "h": 4, "w": 8, "x": 16, "y": 14 },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 14 },
       "id": 6,
       "options": {
         "colorMode": "value",
@@ -276,6 +285,43 @@
       "targets": [
         {
           "expr": "meshcore_uptime_seconds{node=~\"$node\"}",
+          "legendFormat": "{{node}}"
+        }
+      ]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 59 },
+              { "color": "orange", "value": 104 },
+              { "color": "red", "value": 131 }
+            ]
+          },
+          "unit": "fahrenheit"
+        }
+      },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 14 },
+      "id": 41,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "title": "Temperature",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "meshcore_temperature_celsius{node=~\"$node\"} * 9/5 + 32",
           "legendFormat": "{{node}}"
         }
       ]
@@ -1007,7 +1053,7 @@
   "time": { "from": "now-1h", "to": "now" },
   "timepicker": {},
   "timezone": "browser",
-  "title": "MeshCore Radio",
+  "title": "Colorado Springs MeshCore Network",
   "uid": "meshcore-radio",
   "version": 1
 }

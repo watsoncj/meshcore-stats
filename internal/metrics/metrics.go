@@ -11,6 +11,11 @@ var (
 		Help: "Battery voltage in millivolts",
 	}, []string{"node"})
 
+	TemperatureCelsius = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "meshcore_temperature_celsius",
+		Help: "Device temperature in degrees Celsius",
+	}, []string{"node"})
+
 	UptimeSeconds = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "meshcore_uptime_seconds",
 		Help: "Device uptime in seconds",

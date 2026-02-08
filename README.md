@@ -68,6 +68,7 @@ The radio will login to the named repeater and periodically query its stats.
 | Metric | Description |
 |--------|-------------|
 | `meshcore_battery_millivolts` | Battery voltage in millivolts |
+| `meshcore_temperature_celsius` | Device temperature in degrees Celsius |
 | `meshcore_uptime_seconds` | Device uptime in seconds |
 | `meshcore_error_flags` | Error flags bitmask |
 | `meshcore_queue_length` | Outbound packet queue length |

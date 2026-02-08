@@ -19,7 +19,11 @@ const (
 	CmdSendBinaryReq   = 50
 	CmdGetStats        = 56
 
-	ReqTypeGetOwnerInfo = 0x07
+	ReqTypeGetOwnerInfo      = 0x07
+	ReqTypeGetTelemetryData  = 0x03
+
+	LPPVoltage     = 0x74
+	LPPTemperature = 0x67
 
 	StatsTypeCore    = 0
 	StatsTypeRadio   = 1
@@ -64,6 +68,12 @@ type SelfInfo struct {
 	Lon     float64
 	TxPower uint8
 	MaxTx   uint8
+}
+
+type TelemetryData struct {
+	BatteryVolts float64
+	Temperature  float64
+	HasTemp      bool
 }
 
 type StatsCore struct {
@@ -126,11 +136,18 @@ func BuildSendStatusReqCmd(pubKey []byte) []byte {
 }
 
 func BuildSendOwnerInfoReqCmd(pubKey []byte) []byte {
-	cmd := make([]byte, 1+PubKeySize+4+1)
+	cmd := make([]byte, 1+PubKeySize+1)
 	cmd[0] = CmdSendBinaryReq
 	copy(cmd[1:1+PubKeySize], pubKey)
-	// 4 reserved bytes (zeros)
-	cmd[1+PubKeySize+4] = ReqTypeGetOwnerInfo
+	cmd[1+PubKeySize] = ReqTypeGetOwnerInfo
+	return cmd
+}
+
+func BuildSendTelemetryReqCmd(pubKey []byte) []byte {
+	cmd := make([]byte, 1+PubKeySize+1)
+	cmd[0] = CmdSendBinaryReq
+	copy(cmd[1:1+PubKeySize], pubKey)
+	cmd[1+PubKeySize] = ReqTypeGetTelemetryData
 	return cmd
 }
 
@@ -376,4 +393,45 @@ func ParseStatsPackets(data []byte) (*StatsPackets, error) {
 		FloodRx:  binary.LittleEndian.Uint32(data[18:22]),
 		DirectRx: binary.LittleEndian.Uint32(data[22:26]),
 	}, nil
+}
+
+func ParseTelemetryResponse(data []byte) (*TelemetryData, error) {
+	if len(data) < 7 {
+		return nil, fmt.Errorf("insufficient data for telemetry response: %d", len(data))
+	}
+	if data[0] != PushCodeBinaryResponse {
+		return nil, fmt.Errorf("unexpected response code: 0x%02X", data[0])
+	}
+
+	td := &TelemetryData{}
+	payload := data[6:]
+
+	for len(payload) >= 4 {
+		lppType := payload[1]
+		switch lppType {
+		case LPPVoltage:
+			if len(payload) < 4 {
+				break
+			}
+			raw := uint16(payload[2])<<8 | uint16(payload[3])
+			td.BatteryVolts = float64(raw) / 100.0
+			payload = payload[4:]
+		case LPPTemperature:
+			if len(payload) < 4 {
+				break
+			}
+			raw := int16(uint16(payload[2])<<8 | uint16(payload[3]))
+			td.Temperature = float64(raw) / 10.0
+			td.HasTemp = true
+			payload = payload[4:]
+		default:
+			if len(payload) >= 4 {
+				payload = payload[4:]
+			} else {
+				payload = nil
+			}
+		}
+	}
+
+	return td, nil
 }

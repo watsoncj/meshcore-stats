@@ -379,6 +379,30 @@ func collectRemoteMetrics(radio *meshcore.Radio, interval time.Duration, repeate
 				core.BatteryMV, radioStats.LastRSSI, radioStats.LastSNR,
 				packets.Recv, packets.FloodRx, packets.DirectRx,
 				packets.Sent, packets.FloodTx, packets.DirectTx)
+
+			log.Printf("Requesting telemetry from %s (path=%d)...", targetContact.Name, targetContact.OutPathLen)
+			_, err = radio.SendTelemetryReq(targetContact.PubKey[:])
+			if err != nil {
+				log.Printf("Error sending telemetry request: %v", err)
+			} else {
+				telemetryCodes := []byte{meshcore.PushCodeBinaryResponse}
+				tdata, err := radio.WaitForPushCode(telemetryCodes, 10*time.Second)
+				if err != nil {
+					log.Printf("Telemetry not available (repeater may not support it): %v", err)
+					radio.DrainPort()
+				} else {
+					log.Printf("Telemetry response: %d bytes, data=%X", len(tdata), tdata)
+					telemetry, err := meshcore.ParseTelemetryResponse(tdata)
+					if err != nil {
+						log.Printf("Error parsing telemetry response: %v", err)
+					} else if telemetry.HasTemp {
+						metrics.TemperatureCelsius.WithLabelValues(repeaterName).Set(telemetry.Temperature)
+						log.Printf("Telemetry: battery=%.2fV, temperature=%.1f°C", telemetry.BatteryVolts, telemetry.Temperature)
+					} else {
+						log.Printf("Telemetry: battery=%.2fV, no temperature data", telemetry.BatteryVolts)
+					}
+				}
+			}
 		} else {
 			log.Printf("Unexpected response: 0x%02X", data[0])
 		}

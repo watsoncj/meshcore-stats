@@ -72,6 +72,20 @@ func (r *Radio) Close() error {
 	return r.port.Close()
 }
 
+func (r *Radio) DrainPort() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.port.SetReadTimeout(100 * time.Millisecond)
+	buf := make([]byte, maxFrameSize)
+	for {
+		n, _ := r.port.Read(buf)
+		if n == 0 {
+			break
+		}
+	}
+	r.port.SetReadTimeout(2 * time.Second)
+}
+
 func (r *Radio) sendCommand(cmd []byte, expectedSize int) ([]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -351,6 +365,15 @@ func (r *Radio) SendStatusReq(pubKey []byte) (uint32, error) {
 
 func (r *Radio) SendOwnerInfoReq(pubKey []byte) (uint32, error) {
 	data, err := r.sendCommand(BuildSendOwnerInfoReqCmd(pubKey), 0)
+	if err != nil {
+		return 0, err
+	}
+	_, tag, _, err := ParseSentResponse(data)
+	return tag, err
+}
+
+func (r *Radio) SendTelemetryReq(pubKey []byte) (uint32, error) {
+	data, err := r.sendCommand(BuildSendTelemetryReqCmd(pubKey), 0)
 	if err != nil {
 		return 0, err
 	}
